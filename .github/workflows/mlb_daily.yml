@@ -19,10 +19,23 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build live slate from Betano odds
+        env:
+          ODDSPAPI_API_KEY: ${{ secrets.ODDSPAPI_API_KEY }}
+          ODDSPAPI_BOOKMAKER: betano.bet.br
+        run: |
+          python mlb_automation/build_live_slate.py \
+            --output mlb_automation/live_slate.json
+
       - name: Run daily report
         run: |
           python mlb_automation/run_daily.py \
-            --input mlb_automation/sample_slate.json \
+            --input mlb_automation/live_slate.json \
             --output mlb_automation/report_${{ github.run_id }}.md
 
       - name: Send report email
@@ -40,4 +53,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mlb-daily-report
-          path: mlb_automation/report_${{ github.run_id }}.md
+          path: |
+            mlb_automation/live_slate.json
+            mlb_automation/report_${{ github.run_id }}.md
