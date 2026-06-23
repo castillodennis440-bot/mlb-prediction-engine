@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+   #!/usr/bin/env python3
 import argparse
 import json
 import math
@@ -346,15 +346,19 @@ def render_report(data, results):
         lines.append(f"- Start: {start_time}")
         lines.append(f"- Venue: {game.get('venue', 'N/A')}")
         lines.append(f"- Starters: {game.get('away_starter', 'TBD')} vs {game.get('home_starter', 'TBD')}")
+        lines.append(f"- Team form: {game.get('away_form_note', 'N/A')} | {game.get('home_form_note', 'N/A')}")
+        lines.append(f"- Starter model: {game.get('away_pitcher_note', 'N/A')} | {game.get('home_pitcher_note', 'N/A')}")
         lines.append(f"- Lineups: {game.get('lineup_status', 'unknown')}")
         lines.append(f"- Weather: {game.get('weather_note', 'N/A')}")
         lines.append(f"- Bullpen: {game.get('bullpen_note', 'N/A')}")
+        lines.append(f"- Blend: {game.get('model_blend_note', 'N/A')}")
         lines.append(f"- Model score (F5): {game['away_team']} {game['lambda_away_5']:.2f} / {game['home_team']} {game['lambda_home_5']:.2f}")
         lines.append(f"- Model score (FG): {game['away_team']} {game['lambda_away_9']:.2f} / {game['home_team']} {game['lambda_home_9']:.2f}")
 
         if result["qualified"]:
             best = result["best"]
             lines.append(f"- Best play: {best['selection']} @ {best['odds']:.2f} — {best['tier']} | Fair {fmt_pct(best['fair'])} | P(est) {fmt_pct(best['p_est'])} | Adj Edge {fmt_pts(best['adjusted_edge'])} | EV {best['ev']:.3f}")
+            lines.append(f"- Why it qualifies: {best['reason']}")
             extras = [c for c in result["qualified"][1:3]]
             for c in extras:
                 lines.append(f"- Also qualifies: {c['selection']} @ {c['odds']:.2f} — {c['tier']} | Adj Edge {fmt_pts(c['adjusted_edge'])} | EV {c['ev']:.3f}")
@@ -394,4 +398,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()     
