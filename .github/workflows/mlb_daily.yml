@@ -27,7 +27,7 @@ jobs:
       - name: Build live slate from Betano odds
         env:
           ODDSPAPI_API_KEY: ${{ secrets.ODDSPAPI_API_KEY }}
-          ODDSPAPI_BOOKMAKER: betano.bet.br
+          ODDSPAPI_BOOKMAKER: pinnacle
         run: |
           python mlb_automation/build_live_slate.py \
             --output mlb_automation/live_slate.json
