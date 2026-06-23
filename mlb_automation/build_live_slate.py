@@ -54,6 +54,39 @@ TEAM_PARKS = {
     "Washington Nationals": {"venue": "Nationals Park", "lat": 38.8729, "lon": -77.0074},
 }
 
+TEAM_IDS = {
+    "Arizona Diamondbacks": 109,
+    "Atlanta Braves": 144,
+    "Baltimore Orioles": 110,
+    "Boston Red Sox": 111,
+    "Chicago Cubs": 112,
+    "Chicago White Sox": 145,
+    "Cincinnati Reds": 113,
+    "Cleveland Guardians": 114,
+    "Colorado Rockies": 115,
+    "Detroit Tigers": 116,
+    "Houston Astros": 117,
+    "Kansas City Royals": 118,
+    "Los Angeles Angels": 108,
+    "Los Angeles Dodgers": 119,
+    "Miami Marlins": 146,
+    "Milwaukee Brewers": 158,
+    "Minnesota Twins": 142,
+    "New York Mets": 121,
+    "New York Yankees": 147,
+    "Athletics": 133,
+    "Philadelphia Phillies": 143,
+    "Pittsburgh Pirates": 134,
+    "San Diego Padres": 135,
+    "San Francisco Giants": 137,
+    "Seattle Mariners": 136,
+    "St. Louis Cardinals": 138,
+    "Tampa Bay Rays": 139,
+    "Texas Rangers": 140,
+    "Toronto Blue Jays": 141,
+    "Washington Nationals": 120,
+}
+
 TEAM_ALIASES = {
     "A's": "Athletics",
     "Oakland Athletics": "Athletics",
@@ -177,34 +210,76 @@ def fetch_odds(fixture_id: str) -> dict:
     return data.get("bookmakerOdds", {}).get(BOOKMAKER, {})
 
 
-def fetch_mlb_schedule_map(day: datetime) -> dict:
+def fetch_mlb_schedule_games(day: datetime) -> list[dict]:
     payload = safe_get(
         MLB_SCHEDULE_URL,
         {
             "sportId": 1,
             "date": day.strftime("%Y-%m-%d"),
+            "gameTypes": "R",
             "hydrate": "probablePitcher,venue",
         },
     )
-    mapping = {}
+    games = []
     for date_row in payload.get("dates", []):
         for game in date_row.get("games", []):
             away_team = normalize_team(game.get("teams", {}).get("away", {}).get("team", {}).get("name", ""))
             home_team = normalize_team(game.get("teams", {}).get("home", {}).get("team", {}).get("name", ""))
             if not away_team or not home_team:
                 continue
-            mapping[(away_team, home_team)] = {
+            games.append({
                 "game_pk": game.get("gamePk"),
                 "start_time": game.get("gameDate"),
                 "venue": game.get("venue", {}).get("name"),
-                "away_team_id": game.get("teams", {}).get("away", {}).get("team", {}).get("id"),
-                "home_team_id": game.get("teams", {}).get("home", {}).get("team", {}).get("id"),
+                "away_team": away_team,
+                "home_team": home_team,
+                "away_team_id": game.get("teams", {}).get("away", {}).get("team", {}).get("id") or TEAM_IDS.get(away_team),
+                "home_team_id": game.get("teams", {}).get("home", {}).get("team", {}).get("id") or TEAM_IDS.get(home_team),
                 "away_starter": game.get("teams", {}).get("away", {}).get("probablePitcher", {}).get("fullName"),
                 "home_starter": game.get("teams", {}).get("home", {}).get("probablePitcher", {}).get("fullName"),
                 "away_starter_id": game.get("teams", {}).get("away", {}).get("probablePitcher", {}).get("id"),
                 "home_starter_id": game.get("teams", {}).get("home", {}).get("probablePitcher", {}).get("id"),
-            }
-    return mapping
+            })
+    return games
+
+
+def match_schedule_game(away_team: str, home_team: str, start_time: str | None, schedule_games: list[dict]) -> dict:
+    exact = [g for g in schedule_games if g["away_team"] == away_team and g["home_team"] == home_team]
+    if exact:
+        return exact[0]
+
+    if start_time:
+        try:
+            target = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            same_home = [g for g in schedule_games if g["home_team"] == home_team]
+            if same_home:
+                same_home.sort(
+                    key=lambda g: abs(
+                        (
+                            datetime.fromisoformat(g["start_time"].replace("Z", "+00:00")) - target
+                        ).total_seconds()
+                    )
+                )
+                return same_home[0]
+        except Exception:
+            pass
+
+    for g in schedule_games:
+        if g["home_team"] == home_team or g["away_team"] == away_team:
+            return g
+
+    return {
+        "away_team": away_team,
+        "home_team": home_team,
+        "away_team_id": TEAM_IDS.get(away_team),
+        "home_team_id": TEAM_IDS.get(home_team),
+        "venue": TEAM_PARKS.get(home_team, {}).get("venue"),
+        "start_time": start_time,
+        "away_starter": None,
+        "home_starter": None,
+        "away_starter_id": None,
+        "home_starter_id": None,
+    }
 
 
 def fetch_recent_team_games(team_id: int, day: datetime) -> list[dict]:
@@ -215,6 +290,7 @@ def fetch_recent_team_games(team_id: int, day: datetime) -> list[dict]:
             "teamId": team_id,
             "startDate": (day - timedelta(days=21)).strftime("%Y-%m-%d"),
             "endDate": (day - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "gameTypes": "R",
         },
     )
     games = []
@@ -230,11 +306,9 @@ def fetch_recent_team_games(team_id: int, day: datetime) -> list[dict]:
             if team_id == away_id:
                 runs_for = away_score
                 runs_against = home_score
-                location = "away"
             elif team_id == home_id:
                 runs_for = home_score
                 runs_against = away_score
-                location = "home"
             else:
                 continue
             if runs_for is None or runs_against is None:
@@ -244,15 +318,25 @@ def fetch_recent_team_games(team_id: int, day: datetime) -> list[dict]:
                 "runs_for": int(runs_for),
                 "runs_against": int(runs_against),
                 "won": int(runs_for) > int(runs_against),
-                "location": location,
             })
     games.sort(key=lambda x: x["game_pk"], reverse=True)
     return games[:10]
 
 
-def recent_form_summary(team_id: int, team_name: str, day: datetime, cache: dict) -> dict:
-    if team_id in cache:
-        return cache[team_id]
+def recent_form_summary(team_id: int | None, team_name: str, day: datetime, cache: dict) -> dict:
+    cache_key = team_id or team_name
+    if cache_key in cache:
+        return cache[cache_key]
+
+    if not team_id:
+        result = {
+            "offense_factor": 1.0,
+            "defense_factor": 1.0,
+            "form_factor": 1.0,
+            "note": f"{team_name}: recent-form feed unavailable.",
+        }
+        cache[cache_key] = result
+        return result
 
     try:
         games = fetch_recent_team_games(team_id, day)
@@ -263,7 +347,7 @@ def recent_form_summary(team_id: int, team_name: str, day: datetime, cache: dict
             "form_factor": 1.0,
             "note": f"{team_name}: recent-form feed unavailable.",
         }
-        cache[team_id] = result
+        cache[cache_key] = result
         return result
 
     if not games:
@@ -273,7 +357,7 @@ def recent_form_summary(team_id: int, team_name: str, day: datetime, cache: dict
             "form_factor": 1.0,
             "note": f"{team_name}: no recent final games found.",
         }
-        cache[team_id] = result
+        cache[cache_key] = result
         return result
 
     n = len(games)
@@ -290,19 +374,23 @@ def recent_form_summary(team_id: int, team_name: str, day: datetime, cache: dict
         "form_factor": round(form_factor, 3),
         "note": f"{team_name}: {wins}-{n-wins} last {n}, RS/G {rs_pg:.2f}, RA/G {ra_pg:.2f}.",
     }
-    cache[team_id] = result
+    cache[cache_key] = result
     return result
 
 
 def fetch_pitcher_rating(person_id: int | None, pitcher_name: str, day: datetime, cache: dict) -> dict:
+    cache_key = person_id or pitcher_name or "TBD"
+    if cache_key in cache:
+        return cache[cache_key]
+
     if not person_id:
-        return {
+        result = {
             "factor": 1.0,
             "limited": True,
             "note": f"{pitcher_name or 'TBD'}: starter stats unavailable.",
         }
-    if person_id in cache:
-        return cache[person_id]
+        cache[cache_key] = result
+        return result
 
     try:
         payload = safe_get(
@@ -317,7 +405,7 @@ def fetch_pitcher_rating(person_id: int | None, pitcher_name: str, day: datetime
             "limited": True,
             "note": f"{pitcher_name}: starter stats request failed.",
         }
-        cache[person_id] = result
+        cache[cache_key] = result
         return result
 
     games_started = int(stat.get("gamesStarted") or 0)
@@ -350,20 +438,26 @@ def fetch_pitcher_rating(person_id: int | None, pitcher_name: str, day: datetime
             + (" (limited sample)" if limited else "")
         ),
     }
-    cache[person_id] = result
+    cache[cache_key] = result
     return result
 
 
-def bullpen_summary(team_id: int, team_name: str, day: datetime, team_cache: dict, boxscore_cache: dict) -> tuple[str, float]:
-    if team_id in team_cache:
-        return team_cache[team_id]
+def bullpen_summary(team_id: int | None, team_name: str, day: datetime, team_cache: dict, boxscore_cache: dict) -> tuple[str, float]:
+    cache_key = team_id or team_name
+    if cache_key in team_cache:
+        return team_cache[cache_key]
+
+    if not team_id:
+        note = f"{team_name}: bullpen data unavailable."
+        team_cache[cache_key] = (note, 0.25)
+        return team_cache[cache_key]
 
     try:
         recent_games = fetch_recent_team_games(team_id, day)
     except Exception:
         note = "Bullpen usage feed unavailable; neutral bullpen penalty applied."
-        team_cache[team_id] = (note, 0.25)
-        return team_cache[team_id]
+        team_cache[cache_key] = (note, 0.25)
+        return team_cache[cache_key]
 
     total_pitches = 0
     appearances = 0
@@ -416,8 +510,8 @@ def bullpen_summary(team_id: int, team_name: str, day: datetime, team_cache: dic
         note = f"Bullpen {color}: no recent relief workload captured for {team_name}."
     else:
         note = f"Bullpen {color}: {appearances} relief apps, {total_pitches} pitches, {innings:.1f} IP in last 3 games."
-    team_cache[team_id] = (note, penalty)
-    return team_cache[team_id]
+    team_cache[cache_key] = (note, penalty)
+    return team_cache[cache_key]
 
 
 def fetch_weather(home_team: str, start_time: str | None) -> tuple[str, float, float]:
@@ -673,7 +767,7 @@ def build_game(
     fixture: dict,
     book: dict,
     catalog: dict[int, dict],
-    schedule_map: dict,
+    schedule_games: list[dict],
     bullpen_team_cache: dict,
     bullpen_boxscore_cache: dict,
     form_cache: dict,
@@ -682,7 +776,7 @@ def build_game(
 ) -> dict | None:
     away_team = normalize_team(fixture.get("participant1Name") or fixture.get("awayTeamName") or "Away Team")
     home_team = normalize_team(fixture.get("participant2Name") or fixture.get("homeTeamName") or "Home Team")
-    sched = schedule_map.get((away_team, home_team), {})
+    sched = match_schedule_game(away_team, home_team, fixture.get("startTime"), schedule_games)
 
     markets = book.get("markets") or {}
     fg_ml = choose_moneyline(markets, catalog, "Winner (incl. extra innings)")
@@ -705,24 +799,28 @@ def build_game(
     venue = sched.get("venue") or TEAM_PARKS.get(home_team, {}).get("venue") or "N/A"
     start_time = sched.get("start_time") or fixture.get("startTime")
 
-    away_team_id = sched.get("away_team_id")
-    home_team_id = sched.get("home_team_id")
-    away_form = recent_form_summary(away_team_id, away_team, now_utc, form_cache) if away_team_id else {"offense_factor": 1.0, "defense_factor": 1.0, "form_factor": 1.0, "note": f"{away_team}: recent-form feed unavailable."}
-    home_form = recent_form_summary(home_team_id, home_team, now_utc, form_cache) if home_team_id else {"offense_factor": 1.0, "defense_factor": 1.0, "form_factor": 1.0, "note": f"{home_team}: recent-form feed unavailable."}
+    away_team_id = sched.get("away_team_id") or TEAM_IDS.get(away_team)
+    home_team_id = sched.get("home_team_id") or TEAM_IDS.get(home_team)
+
+    away_form = recent_form_summary(away_team_id, away_team, now_utc, form_cache)
+    home_form = recent_form_summary(home_team_id, home_team, now_utc, form_cache)
 
     away_starter = sched.get("away_starter") or "TBD"
     home_starter = sched.get("home_starter") or "TBD"
     away_starter_id = sched.get("away_starter_id")
     home_starter_id = sched.get("home_starter_id")
+
     away_pitcher = fetch_pitcher_rating(away_starter_id, away_starter, now_utc, pitcher_cache)
     home_pitcher = fetch_pitcher_rating(home_starter_id, home_starter, now_utc, pitcher_cache)
 
-    away_bullpen_note, away_bullpen_penalty = bullpen_summary(away_team_id, away_team, now_utc, bullpen_team_cache, bullpen_boxscore_cache) if away_team_id else ("Away bullpen data unavailable.", 0.25)
-    home_bullpen_note, home_bullpen_penalty = bullpen_summary(home_team_id, home_team, now_utc, bullpen_team_cache, bullpen_boxscore_cache) if home_team_id else ("Home bullpen data unavailable.", 0.25)
+    away_bullpen_note, away_bullpen_penalty = bullpen_summary(away_team_id, away_team, now_utc, bullpen_team_cache, bullpen_boxscore_cache)
+    home_bullpen_note, home_bullpen_penalty = bullpen_summary(home_team_id, home_team, now_utc, bullpen_team_cache, bullpen_boxscore_cache)
     bullpen_penalty = round(max(away_bullpen_penalty, home_bullpen_penalty), 2)
     bullpen_note = f"{away_team}: {away_bullpen_note} | {home_team}: {home_bullpen_note}"
 
-    model_home_9, model_away_9, model_home_5, model_away_5 = build_custom_lambdas(home_form, away_form, home_pitcher, away_pitcher, home_bullpen_penalty, away_bullpen_penalty)
+    model_home_9, model_away_9, model_home_5, model_away_5 = build_custom_lambdas(
+        home_form, away_form, home_pitcher, away_pitcher, home_bullpen_penalty, away_bullpen_penalty
+    )
 
     weather_note, weather_penalty, total_adjust = fetch_weather(home_team, start_time)
     model_home_9, model_away_9 = apply_total_adjustment(model_home_9, model_away_9, total_adjust)
@@ -805,7 +903,7 @@ def main() -> None:
     now_utc = report_date()
     catalog = load_market_catalog()
     fixtures = fetch_fixtures(now_utc)
-    schedule_map = fetch_mlb_schedule_map(now_utc)
+    schedule_games = fetch_mlb_schedule_games(now_utc)
     bullpen_team_cache = {}
     bullpen_boxscore_cache = {}
     form_cache = {}
@@ -823,7 +921,7 @@ def main() -> None:
                 fixture,
                 book,
                 catalog,
-                schedule_map,
+                schedule_games,
                 bullpen_team_cache,
                 bullpen_boxscore_cache,
                 form_cache,
