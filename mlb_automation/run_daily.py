@@ -2,14 +2,20 @@
 import argparse
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 
 MAX_RUNS = 20
+DISPLAY_TIERS = {"LEAN": 1, "BET": 2, "STRONG BET": 3, "BANKER": 4}
+
 
 def poisson_pmf(k: int, lam: float) -> float:
+    if lam < 0:
+        raise ValueError("lambda must be non-negative")
     if k < 0:
         return 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
 
 def poisson_series(lam: float, max_runs: int = MAX_RUNS):
     probs = [poisson_pmf(k, lam) for k in range(max_runs)]
@@ -17,10 +23,12 @@ def poisson_series(lam: float, max_runs: int = MAX_RUNS):
     probs.append(tail)
     return probs
 
+
 def joint_probs(home_lam: float, away_lam: float, max_runs: int = MAX_RUNS):
     home = poisson_series(home_lam, max_runs)
     away = poisson_series(away_lam, max_runs)
     return home, away
+
 
 def probs_from_distributions(home, away):
     p_home = 0.0
@@ -58,6 +66,7 @@ def probs_from_distributions(home, away):
         "total_probs": total_probs,
     }
 
+
 def f5_probs(home, away):
     p_home_lead = 0.0
     p_away_lead = 0.0
@@ -88,52 +97,138 @@ def f5_probs(home, away):
         "total_probs": total_probs,
     }
 
+
 def over_prob(total_probs, line: float) -> float:
     threshold = math.floor(line) + 1
     return sum(p for total, p in total_probs.items() if total >= threshold)
 
+
 def under_prob(total_probs, line: float) -> float:
     return 1.0 - over_prob(total_probs, line)
+
 
 def fair_probability(odds_a: float, odds_b: float) -> float:
     implied_a = 1.0 / odds_a
     implied_b = 1.0 / odds_b
     return implied_a / (implied_a + implied_b)
 
+
 def hold(odds_a: float, odds_b: float) -> float:
     return (1.0 / odds_a) + (1.0 / odds_b) - 1.0
 
-def classify_tier(adjusted_edge: float, ev: float, hold_pct: float):
-    if adjusted_edge >= 8.0 and ev >= 0.08 and hold_pct <= 5.0:
-        return "BANKER"
-    if adjusted_edge >= 5.0 and ev >= 0.05 and hold_pct <= 6.0:
-        return "STRONG BET"
-    if adjusted_edge >= 3.0 and ev >= 0.03:
-        return "BET"
-    if adjusted_edge >= 1.5 and ev > 0:
-        return "LEAN"
-    return "SKIP"
 
-def price_market(name, selection, odds_a, odds_b, p_est):
+def classify_tier(adjusted_edge: float, ev: float, hold_pct: float, capped: str | None = None,
+                  major_sample: bool = False, major_lineup: bool = False, extreme_weather: bool = False):
+    tier = "SKIP"
+    if adjusted_edge >= 8.0 and ev >= 0.08 and hold_pct <= 5.0 and not major_sample and not major_lineup and not extreme_weather:
+        tier = "BANKER"
+    elif adjusted_edge >= 5.0 and ev >= 0.05 and hold_pct <= 6.0:
+        tier = "STRONG BET"
+    elif adjusted_edge >= 3.0 and ev >= 0.03:
+        tier = "BET"
+    elif adjusted_edge >= 1.5 and ev > 0:
+        tier = "LEAN"
+
+    order = ["SKIP", "LEAN", "BET", "STRONG BET", "BANKER"]
+    if capped and order.index(tier) > order.index(capped):
+        tier = capped
+    return tier
+
+
+def penalty_for_market(game, market_key: str, is_alt: bool = False):
+    p = 0.0
+    notes = []
+
+    limited_away = game.get("away_starter_limited_sample", False)
+    limited_home = game.get("home_starter_limited_sample", False)
+    both_limited = limited_away and limited_home
+    if both_limited:
+        p += 2.5
+        notes.append("both starters limited sample")
+    elif limited_away or limited_home:
+        p += 1.5
+        notes.append("one starter limited sample")
+
+    weather_penalty = float(game.get("weather_penalty", 0.0))
+    if weather_penalty:
+        p += weather_penalty
+        notes.append(f"weather {weather_penalty:.1f} pts")
+
+    if market_key.startswith("fg"):
+        bullpen_penalty = float(game.get("bullpen_penalty", 0.0))
+        if bullpen_penalty:
+            p += bullpen_penalty
+            notes.append(f"bullpen {bullpen_penalty:.1f} pts")
+
+    lineup_penalty = float(game.get("lineup_penalty", 0.0))
+    if lineup_penalty:
+        p += lineup_penalty
+        notes.append(f"lineups {lineup_penalty:.1f} pts")
+
+    return p, notes
+
+
+def reason_text(selection, edge_pct, penalty_pct, game, extra_note=""):
+    chunks = [f"edge {edge_pct:.1f} pts", f"penalty {penalty_pct:.1f} pts"]
+    if game.get("lineup_status"):
+        chunks.append(f"{game['lineup_status']}")
+    if extra_note:
+        chunks.append(extra_note)
+    return "; ".join(chunks)
+
+
+def price_market(name, selection, odds_a, odds_b, p_est, game, market_key, extra_note="", is_alt=False):
     fair = fair_probability(odds_a, odds_b)
     market_hold = hold(odds_a, odds_b)
+    market_hold_pct = 100.0 * market_hold
     edge = p_est - fair
     ev = (p_est * odds_a) - 1.0
-    adjusted_edge = (edge * 100.0)
 
-    tier = "SKIP" if edge <= 0 or ev <= 0 else classify_tier(adjusted_edge, ev, market_hold * 100.0)
+    penalty, penalty_notes = penalty_for_market(game, market_key, is_alt=is_alt)
+    if (not is_alt and market_hold_pct > 6.0) or (is_alt and market_hold_pct > 8.0):
+        extra = 1.0 if is_alt else 0.5
+        penalty += extra
+        penalty_notes.append(f"hold {extra:.1f} pts")
+
+    adjusted_edge = edge - (penalty / 100.0)
+
+    capped = None
+    if market_key.startswith("f5") and not game.get("starters_confirmed", False):
+        capped = "LEAN"
+    if str(game.get("lineup_status", "")).lower() not in {"confirmed", "projected-near-lock"}:
+        capped = "STRONG BET" if capped is None else capped
+    if is_alt and market_hold_pct > 8.0:
+        capped = "BET" if capped is None else capped
+
+    major_sample = bool(game.get("away_starter_limited_sample") or game.get("home_starter_limited_sample"))
+    major_lineup = str(game.get("lineup_status", "")).lower() == "projected"
+    extreme_weather = float(game.get("weather_penalty", 0.0)) >= 1.0
+
+    edge_pct = edge * 100.0
+    adjusted_edge_pct = adjusted_edge * 100.0
+
+    if edge <= 0 or ev <= 0:
+        tier = "SKIP"
+    else:
+        tier = classify_tier(adjusted_edge_pct, ev, market_hold_pct, capped, major_sample, major_lineup, extreme_weather)
 
     return {
         "market": name,
         "selection": selection,
         "odds": odds_a,
+        "opp_odds": odds_b,
         "fair": fair,
         "p_est": p_est,
         "edge": edge,
-        "adjusted_edge": edge,
+        "penalty": penalty / 100.0,
+        "adjusted_edge": adjusted_edge,
         "ev": ev,
+        "hold": market_hold,
         "tier": tier,
+        "reason": reason_text(selection, edge_pct, penalty, game, extra_note),
+        "penalty_notes": penalty_notes,
     }
+
 
 def evaluate_game(game):
     home9, away9 = joint_probs(game["lambda_home_9"], game["lambda_away_9"])
@@ -142,92 +237,161 @@ def evaluate_game(game):
     fg = probs_from_distributions(home9, away9)
     f5 = f5_probs(home5, away5)
     odds = game["odds"]
-
     candidates = []
 
-    candidates.append(price_market(
-        "Full Game Moneyline",
-        f'{game["home_team"]} ML',
-        odds["fg_ml"]["home"],
-        odds["fg_ml"]["away"],
-        fg["home_ml"]
-    ))
-    candidates.append(price_market(
-        "Full Game Moneyline",
-        f'{game["away_team"]} ML',
-        odds["fg_ml"]["away"],
-        odds["fg_ml"]["home"],
-        fg["away_ml"]
-    ))
+    if "fg_ml" in odds:
+        candidates.append(price_market("Full Game Moneyline", f"{game['home_team']} ML", odds["fg_ml"]["home"], odds["fg_ml"]["away"], fg["home_ml"], game, "fg_ml"))
+        candidates.append(price_market("Full Game Moneyline", f"{game['away_team']} ML", odds["fg_ml"]["away"], odds["fg_ml"]["home"], fg["away_ml"], game, "fg_ml"))
 
-    line = odds["fg_total"]["line"]
-    p_over = over_prob(fg["total_probs"], line)
-    p_under = under_prob(fg["total_probs"], line)
+    if "fg_rl" in odds:
+        candidates.append(price_market("Full Game Run Line", f"{game['home_team']} -{odds['fg_rl']['line']}", odds["fg_rl"]["home_minus"], odds["fg_rl"]["away_plus"], fg["home_minus_1_5"], game, "fg_rl"))
+        candidates.append(price_market("Full Game Run Line", f"{game['away_team']} +{odds['fg_rl']['line']}", odds["fg_rl"]["away_plus"], odds["fg_rl"]["home_minus"], fg["away_plus_1_5"], game, "fg_rl"))
 
-    candidates.append(price_market(
-        "Full Game Total",
-        f"Over {line}",
-        odds["fg_total"]["over"],
-        odds["fg_total"]["under"],
-        p_over
-    ))
-    candidates.append(price_market(
-        "Full Game Total",
-        f"Under {line}",
-        odds["fg_total"]["under"],
-        odds["fg_total"]["over"],
-        p_under
-    ))
+    if "fg_total" in odds:
+        line = odds["fg_total"]["line"]
+        p_over = over_prob(fg["total_probs"], line)
+        p_under = under_prob(fg["total_probs"], line)
+        candidates.append(price_market("Full Game Total", f"Over {line}", odds["fg_total"]["over"], odds["fg_total"]["under"], p_over, game, "fg_total"))
+        candidates.append(price_market("Full Game Total", f"Under {line}", odds["fg_total"]["under"], odds["fg_total"]["over"], p_under, game, "fg_total"))
+
+    if "f5_ml" in odds:
+        candidates.append(price_market("F5 Moneyline", f"{game['home_team']} F5 ML", odds["f5_ml"]["home"], odds["f5_ml"]["away"], f5["home_ml_cond"], game, "f5_ml", extra_note=f"tie after 5: {f5['tie']:.1%}"))
+        candidates.append(price_market("F5 Moneyline", f"{game['away_team']} F5 ML", odds["f5_ml"]["away"], odds["f5_ml"]["home"], f5["away_ml_cond"], game, "f5_ml", extra_note=f"tie after 5: {f5['tie']:.1%}"))
+
+    if "f5_rl" in odds:
+        candidates.append(price_market("F5 Run Line", f"{game['home_team']} -{odds['f5_rl']['line']} F5", odds["f5_rl"]["home_minus"], odds["f5_rl"]["away_plus"], f5["home_minus_0_5"], game, "f5_rl"))
+        candidates.append(price_market("F5 Run Line", f"{game['away_team']} +{odds['f5_rl']['line']} F5", odds["f5_rl"]["away_plus"], odds["f5_rl"]["home_minus"], f5["away_plus_0_5"], game, "f5_rl"))
+
+    if "f5_total" in odds:
+        line = odds["f5_total"]["line"]
+        p_over = over_prob(f5["total_probs"], line)
+        p_under = under_prob(f5["total_probs"], line)
+        candidates.append(price_market("F5 Total", f"Over {line} F5", odds["f5_total"]["over"], odds["f5_total"]["under"], p_over, game, "f5_total"))
+        candidates.append(price_market("F5 Total", f"Under {line} F5", odds["f5_total"]["under"], odds["f5_total"]["over"], p_under, game, "f5_total"))
 
     qualified = [c for c in candidates if c["tier"] != "SKIP"]
     ranked = sorted(qualified, key=lambda x: (x["adjusted_edge"], x["ev"]), reverse=True)
+    rejected = [c for c in candidates if c["tier"] == "SKIP"]
 
     return {
         "game": game,
         "qualified": ranked,
+        "rejected": rejected,
         "best": ranked[0] if ranked else None,
+        "fg": fg,
+        "f5": f5,
     }
+
+
+def fmt_pct(x: float) -> str:
+    return f"{100*x:.1f}%"
+
+
+def fmt_pts(x: float) -> str:
+    return f"{100*x:.1f} pts"
+
+
+def format_start_time(iso_value: str | None) -> str:
+    if not iso_value:
+        return "TBD"
+    try:
+        dt = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return iso_value
+
+
+def tier_rank(tier: str) -> int:
+    return DISPLAY_TIERS.get(tier, 0)
+
 
 def render_report(data, results):
     lines = []
-    lines.append(f'# MLB Daily Model Report — {data["date"]}')
+    source = data.get("source", {})
+    generated = data.get("generated_at_utc")
+
+    lines.append(f"# MLB Daily Model Report — {data['date']}")
     lines.append("")
+    lines.append(f"Source: {source.get('provider', 'N/A')} / {source.get('bookmaker', 'N/A')}")
+    if generated:
+        lines.append(f"Generated: {generated}")
+    lines.append("")
+
     if not results:
-        lines.append("No live MLB games were parsed from Betano for this run.")
-        return "/n". join(lines)
+        lines.append("No live MLB games were parsed for this run.")
+        return "\n".join(lines)
+
+    top_plays = []
     for result in results:
-        game = result["game"]
-        lines.append(f'## {game["away_team"]} at {game["home_team"]}')
+        best = result.get("best")
+        if best and tier_rank(best["tier"]) >= tier_rank("BET"):
+            top_plays.append((best, result["game"]))
+    top_plays.sort(key=lambda x: (tier_rank(x[0]["tier"]), x[0]["adjusted_edge"], x[0]["ev"]), reverse=True)
+
+    if top_plays:
+        lines.append("## Top Plays")
         lines.append("")
-        lines.append(f'- Venue: {game["venue"]}')
-        lines.append(f'- Model λ (FG): {game["away_team"]} {game["lambda_away_9"]:.2f} / {game["home_team"]} {game["lambda_home_9"]:.2f}')
+        for idx, (pick, game) in enumerate(top_plays[:8], 1):
+            lines.append(
+                f"{idx}. {pick['selection']} @ {pick['odds']:.2f} — {pick['tier']} | {game['away_team']} at {game['home_team']} | Fair {fmt_pct(pick['fair'])} | P(est) {fmt_pct(pick['p_est'])} | Adj Edge {fmt_pts(pick['adjusted_edge'])} | EV {pick['ev']:.3f}"
+            )
         lines.append("")
 
+    lines.append("## Game-by-Game")
+    lines.append("")
+    for result in results:
+        game = result["game"]
+        start_time = format_start_time(game.get("source_meta", {}).get("start_time"))
+        lines.append(f"### {game['away_team']} at {game['home_team']}")
+        lines.append(f"- Start: {start_time}")
+        lines.append(f"- Venue: {game.get('venue', 'N/A')}")
+        lines.append(f"- Starters: {game.get('away_starter', 'TBD')} vs {game.get('home_starter', 'TBD')}")
+        lines.append(f"- Lineups: {game.get('lineup_status', 'unknown')}")
+        lines.append(f"- Weather: {game.get('weather_note', 'N/A')}")
+        lines.append(f"- Bullpen: {game.get('bullpen_note', 'N/A')}")
+        lines.append(f"- Model score (F5): {game['away_team']} {game['lambda_away_5']:.2f} / {game['home_team']} {game['lambda_home_5']:.2f}")
+        lines.append(f"- Model score (FG): {game['away_team']} {game['lambda_away_9']:.2f} / {game['home_team']} {game['lambda_home_9']:.2f}")
+
         if result["qualified"]:
-            for c in result["qualified"]:
-                lines.append(
-                    f'- {c["selection"]} @ {c["odds"]:.2f} | Fair {100*c["fair"]:.1f}% | P(est) {100*c["p_est"]:.1f}% | Edge {100*c["edge"]:.1f} pts | EV {c["ev"]:.3f} | {c["tier"]}'
-                )
+            best = result["best"]
+            lines.append(f"- Best play: {best['selection']} @ {best['odds']:.2f} — {best['tier']} | Fair {fmt_pct(best['fair'])} | P(est) {fmt_pct(best['p_est'])} | Adj Edge {fmt_pts(best['adjusted_edge'])} | EV {best['ev']:.3f}")
+            extras = [c for c in result["qualified"][1:3]]
+            for c in extras:
+                lines.append(f"- Also qualifies: {c['selection']} @ {c['odds']:.2f} — {c['tier']} | Adj Edge {fmt_pts(c['adjusted_edge'])} | EV {c['ev']:.3f}")
         else:
-            lines.append('- No qualifying selections.')
+            lines.append("- Best play: No qualifying selections.")
+        lines.append("")
+
+    skipped = data.get("skipped", [])
+    if skipped:
+        lines.append("## Skipped / Data Issues")
+        lines.append("")
+        for row in skipped[:10]:
+            lines.append(f"- {row.get('away', 'Away')} at {row.get('home', 'Home')}: {row.get('reason', 'unknown')}")
         lines.append("")
 
     return "\n".join(lines)
 
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser = argparse.ArgumentParser(description="Run the MLB daily report from a slate JSON.")
+    parser.add_argument("--input", required=True, help="Path to slate JSON")
+    parser.add_argument("--output", default=None, help="Output markdown file path")
     args = parser.parse_args()
 
-    data = json.loads(Path(args.input).read_text())
+    input_path = Path(args.input)
+    data = json.loads(input_path.read_text())
     results = [evaluate_game(game) for game in data.get("games", [])]
     report = render_report(data, results)
 
-    output_path = Path(args.output)
+    output_path = Path(args.output) if args.output else Path("mlb_automation") / f"report_{data['date'].replace('-', '')}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(report)
+
+    print(f"Report written to {output_path}")
+    print()
     print(report)
+
 
 if __name__ == "__main__":
     main()
