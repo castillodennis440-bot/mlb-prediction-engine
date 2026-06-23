@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 8 * * *'
-    - cron: '30 16 * * *'
 
 jobs:
   run-report:
@@ -24,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build live slate from Betano odds
+      - name: Build live slate from Pinnacle odds
         env:
           ODDSPAPI_API_KEY: ${{ secrets.ODDSPAPI_API_KEY }}
           ODDSPAPI_BOOKMAKER: pinnacle
