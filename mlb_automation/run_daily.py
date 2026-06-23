@@ -192,7 +192,9 @@ def render_report(data, results):
     lines = []
     lines.append(f'# MLB Daily Model Report — {data["date"]}')
     lines.append("")
-
+    if not results:
+        lines.append("No live MLB games were parsed from Betano for this run.")
+        return "/n". join(lines)
     for result in results:
         game = result["game"]
         lines.append(f'## {game["away_team"]} at {game["home_team"]}')
@@ -210,7 +212,7 @@ def render_report(data, results):
             lines.append('- No qualifying selections.')
         lines.append("")
 
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 def main():
     parser = argparse.ArgumentParser()
