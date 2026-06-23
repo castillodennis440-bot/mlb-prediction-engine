@@ -1,0 +1,18 @@
+{
+  "date": "2026-06-22",
+  "games": [
+    {
+      "away_team": "Yankees",
+      "home_team": "Red Sox",
+      "venue": "Fenway Park",
+      "lambda_away_5": 2.1,
+      "lambda_home_5": 2.5,
+      "lambda_away_9": 4.2,
+      "lambda_home_9": 4.9,
+      "odds": {
+        "fg_ml": { "away": 2.12, "home": 1.78 },
+        "fg_total": { "line": 8.5, "over": 1.91, "under": 1.91 }
+      }
+    }
+  ]
+}
