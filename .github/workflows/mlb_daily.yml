@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build live slate v3 from Pinnacle odds
+      - name: Build live slate from Pinnacle odds
         env:
           ODDSPAPI_API_KEY: ${{ secrets.ODDSPAPI_API_KEY }}
           ODDSPAPI_BOOKMAKER: pinnacle
@@ -37,16 +37,24 @@ jobs:
             --input mlb_automation/live_slate.json \
             --output mlb_automation/report_${{ github.run_id }}.md
 
-      - name: Send report email
+      - name: Convert report to PDF
+        run: |
+          python mlb_automation/report_to_pdf.py \
+            mlb_automation/report_${{ github.run_id }}.md \
+            mlb_automation/report_${{ github.run_id }}.pdf
+
+      - name: Send report email as PDF
         env:
           EMAIL_HOST: smtp.gmail.com
           EMAIL_PORT: 465
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_SUBJECT: MLB Daily Model Report
+          EMAIL_SUBJECT: MLB Daily Model Report (PDF)
         run: |
-          python mlb_automation/send_email.py mlb_automation/report_${{ github.run_id }}.md
+          python mlb_automation/send_email.py \
+            mlb_automation/report_${{ github.run_id }}.pdf \
+            --body-file mlb_automation/report_${{ github.run_id }}.md
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
@@ -55,3 +63,4 @@ jobs:
           path: |
             mlb_automation/live_slate.json
             mlb_automation/report_${{ github.run_id }}.md
+            mlb_automation/report_${{ github.run_id }}.pdf
