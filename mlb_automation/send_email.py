@@ -6,67 +6,81 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 
+
 def required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
-def build_message(report_path: Path) -> EmailMessage:
+
+def build_message(attachment_path: Path, body_text: str | None = None) -> EmailMessage:
     email_user = required_env("EMAIL_USER")
     email_to = required_env("EMAIL_TO")
     subject = os.getenv("EMAIL_SUBJECT", "MLB Daily Model Report")
 
-    body_intro = os.getenv(
+    default_body = os.getenv(
         "EMAIL_BODY",
-        "Your MLB daily model report is attached. If the attachment does not open easily on mobile, the report text is also included below."
+        "Your MLB daily model report is attached as a PDF. A text copy is included below when available."
     )
-
-    report_text = report_path.read_text(encoding="utf-8")
 
     msg = EmailMessage()
     msg["From"] = email_user
     msg["To"] = email_to
     msg["Subject"] = subject
-    msg.set_content(f"{body_intro}\n\n--- REPORT ---\n\n{report_text}")
 
-    mime_type, _ = mimetypes.guess_type(str(report_path))
+    if body_text:
+        msg.set_content(f"{default_body}\n\n--- REPORT ---\n\n{body_text}")
+    else:
+        msg.set_content(default_body)
+
+    mime_type, _ = mimetypes.guess_type(str(attachment_path))
     if mime_type:
         maintype, subtype = mime_type.split("/", 1)
     else:
-        maintype, subtype = "text", "plain"
+        maintype, subtype = "application", "octet-stream"
 
+    payload = attachment_path.read_bytes()
     msg.add_attachment(
-        report_text.encode("utf-8"),
+        payload,
         maintype=maintype,
         subtype=subtype,
-        filename=report_path.name,
+        filename=attachment_path.name,
     )
     return msg
 
-def send_report(report_path: Path) -> None:
+
+def send_report(attachment_path: Path, body_file: Path | None = None) -> None:
     host = os.getenv("EMAIL_HOST", "smtp.gmail.com")
     port = int(os.getenv("EMAIL_PORT", "465"))
     user = required_env("EMAIL_USER")
     password = required_env("EMAIL_PASS")
 
-    msg = build_message(report_path)
+    body_text = None
+    if body_file and body_file.exists():
+        body_text = body_file.read_text(encoding="utf-8")
+
+    msg = build_message(attachment_path, body_text=body_text)
 
     with smtplib.SMTP_SSL(host, port) as server:
         server.login(user, password)
         server.send_message(msg)
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send the MLB report by email.")
-    parser.add_argument("report", help="Path to the markdown report file")
+    parser.add_argument("attachment", help="Path to the file to attach")
+    parser.add_argument("--body-file", default=None, help="Optional text/markdown file to include in email body")
     args = parser.parse_args()
 
-    report_path = Path(args.report)
-    if not report_path.exists():
-        raise FileNotFoundError(f"Report not found: {report_path}")
+    attachment_path = Path(args.attachment)
+    if not attachment_path.exists():
+        raise FileNotFoundError(f"Attachment not found: {attachment_path}")
 
-    send_report(report_path)
-    print(f"Email sent successfully: {report_path}")
+    body_file = Path(args.body_file) if args.body_file else None
+    send_report(attachment_path, body_file=body_file)
+    print(f"Email sent successfully: {attachment_path}")
+
 
 if __name__ == "__main__":
     main()
