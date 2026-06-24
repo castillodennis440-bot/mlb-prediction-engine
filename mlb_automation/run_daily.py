@@ -1,4 +1,4 @@
-   #!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import json
 import math
@@ -7,6 +7,7 @@ from pathlib import Path
 
 MAX_RUNS = 20
 DISPLAY_TIERS = {"LEAN": 1, "BET": 2, "STRONG BET": 3, "BANKER": 4}
+TIER_ORDER = ["SKIP", "LEAN", "BET", "STRONG BET", "BANKER"]
 
 
 def poisson_pmf(k: int, lam: float) -> float:
@@ -35,6 +36,8 @@ def probs_from_distributions(home, away):
     p_away = 0.0
     p_tie = 0.0
     p_home_by_2 = 0.0
+    p_away_by_2 = 0.0
+    p_home_plus_1_5 = 0.0
     p_away_plus_1_5 = 0.0
     total_probs = {}
 
@@ -43,16 +46,22 @@ def probs_from_distributions(home, away):
             p = ph * pa
             total = h + a
             total_probs[total] = total_probs.get(total, 0.0) + p
-            if h > a:
+            diff = h - a
+
+            if diff > 0:
                 p_home += p
-                if h - a >= 2:
+                if diff >= 2:
                     p_home_by_2 += p
-            elif a > h:
+            elif diff < 0:
                 p_away += p
+                if -diff >= 2:
+                    p_away_by_2 += p
             else:
                 p_tie += p
 
-            if h - a >= -1:
+            if diff >= -1:
+                p_home_plus_1_5 += p
+            if diff <= 1:
                 p_away_plus_1_5 += p
 
     return {
@@ -62,6 +71,8 @@ def probs_from_distributions(home, away):
         "home_ml": p_home + 0.5 * p_tie,
         "away_ml": p_away + 0.5 * p_tie,
         "home_minus_1_5": p_home_by_2,
+        "away_minus_1_5": p_away_by_2,
+        "home_plus_1_5": p_home_plus_1_5,
         "away_plus_1_5": p_away_plus_1_5,
         "total_probs": total_probs,
     }
@@ -93,6 +104,8 @@ def f5_probs(home, away):
         "home_ml_cond": p_home_lead / non_tie,
         "away_ml_cond": p_away_lead / non_tie,
         "home_minus_0_5": p_home_lead,
+        "away_minus_0_5": p_away_lead,
+        "home_plus_0_5": p_home_lead + p_tie,
         "away_plus_0_5": p_away_lead + p_tie,
         "total_probs": total_probs,
     }
@@ -129,10 +142,15 @@ def classify_tier(adjusted_edge: float, ev: float, hold_pct: float, capped: str 
     elif adjusted_edge >= 1.5 and ev > 0:
         tier = "LEAN"
 
-    order = ["SKIP", "LEAN", "BET", "STRONG BET", "BANKER"]
-    if capped and order.index(tier) > order.index(capped):
+    if capped and TIER_ORDER.index(tier) > TIER_ORDER.index(capped):
         tier = capped
     return tier
+
+
+def apply_cap(current_cap: str | None, new_cap: str) -> str:
+    if current_cap is None:
+        return new_cap
+    return current_cap if TIER_ORDER.index(current_cap) <= TIER_ORDER.index(new_cap) else new_cap
 
 
 def penalty_for_market(game, market_key: str, is_alt: bool = False):
@@ -148,6 +166,11 @@ def penalty_for_market(game, market_key: str, is_alt: bool = False):
     elif limited_away or limited_home:
         p += 1.5
         notes.append("one starter limited sample")
+
+    starter_penalty = float(game.get("starter_penalty_f5", 0.0) if market_key.startswith("f5") else game.get("starter_penalty_fg", 0.0))
+    if starter_penalty:
+        p += starter_penalty
+        notes.append(f"starters {starter_penalty:.1f} pts")
 
     weather_penalty = float(game.get("weather_penalty", 0.0))
     if weather_penalty:
@@ -170,6 +193,9 @@ def penalty_for_market(game, market_key: str, is_alt: bool = False):
 
 def reason_text(selection, edge_pct, penalty_pct, game, extra_note=""):
     chunks = [f"edge {edge_pct:.1f} pts", f"penalty {penalty_pct:.1f} pts"]
+    starter_note = game.get("starter_note")
+    if starter_note:
+        chunks.append(starter_note)
     if game.get("lineup_status"):
         chunks.append(f"{game['lineup_status']}")
     if extra_note:
@@ -193,12 +219,20 @@ def price_market(name, selection, odds_a, odds_b, p_est, game, market_key, extra
     adjusted_edge = edge - (penalty / 100.0)
 
     capped = None
-    if market_key.startswith("f5") and not game.get("starters_confirmed", False):
-        capped = "LEAN"
+    away_tbd = str(game.get("away_starter", "TBD")) == "TBD"
+    home_tbd = str(game.get("home_starter", "TBD")) == "TBD"
+    if market_key.startswith("f5") and (away_tbd or home_tbd):
+        capped = apply_cap(capped, "SKIP")
+    elif market_key.startswith("f5") and not game.get("starters_confirmed", False):
+        capped = apply_cap(capped, "LEAN")
+
+    if away_tbd or home_tbd:
+        capped = apply_cap(capped, "BET")
+
     if str(game.get("lineup_status", "")).lower() not in {"confirmed", "projected-near-lock"}:
-        capped = "STRONG BET" if capped is None else capped
+        capped = apply_cap(capped, "STRONG BET")
     if is_alt and market_hold_pct > 8.0:
-        capped = "BET" if capped is None else capped
+        capped = apply_cap(capped, "BET")
 
     major_sample = bool(game.get("away_starter_limited_sample") or game.get("home_starter_limited_sample"))
     major_lineup = str(game.get("lineup_status", "")).lower() == "projected"
@@ -230,6 +264,19 @@ def price_market(name, selection, odds_a, odds_b, p_est, game, market_key, extra
     }
 
 
+def handicap_probabilities(game, fg, f5):
+    probs = {}
+    rl = game["odds"].get("fg_rl")
+    if rl:
+        probs["fg_home"] = fg["home_minus_1_5"] if rl["home_line"] < 0 else fg["home_plus_1_5"]
+        probs["fg_away"] = fg["away_minus_1_5"] if rl["away_line"] < 0 else fg["away_plus_1_5"]
+    f5rl = game["odds"].get("f5_rl")
+    if f5rl:
+        probs["f5_home"] = f5["home_minus_0_5"] if f5rl["home_line"] < 0 else f5["home_plus_0_5"]
+        probs["f5_away"] = f5["away_minus_0_5"] if f5rl["away_line"] < 0 else f5["away_plus_0_5"]
+    return probs
+
+
 def evaluate_game(game):
     home9, away9 = joint_probs(game["lambda_home_9"], game["lambda_away_9"])
     home5, away5 = joint_probs(game["lambda_home_5"], game["lambda_away_5"])
@@ -237,6 +284,7 @@ def evaluate_game(game):
     fg = probs_from_distributions(home9, away9)
     f5 = f5_probs(home5, away5)
     odds = game["odds"]
+    rl_probs = handicap_probabilities(game, fg, f5)
     candidates = []
 
     if "fg_ml" in odds:
@@ -244,8 +292,9 @@ def evaluate_game(game):
         candidates.append(price_market("Full Game Moneyline", f"{game['away_team']} ML", odds["fg_ml"]["away"], odds["fg_ml"]["home"], fg["away_ml"], game, "fg_ml"))
 
     if "fg_rl" in odds:
-        candidates.append(price_market("Full Game Run Line", f"{game['home_team']} -{odds['fg_rl']['line']}", odds["fg_rl"]["home_minus"], odds["fg_rl"]["away_plus"], fg["home_minus_1_5"], game, "fg_rl"))
-        candidates.append(price_market("Full Game Run Line", f"{game['away_team']} +{odds['fg_rl']['line']}", odds["fg_rl"]["away_plus"], odds["fg_rl"]["home_minus"], fg["away_plus_1_5"], game, "fg_rl"))
+        rl = odds["fg_rl"]
+        candidates.append(price_market("Full Game Run Line", f"{game['home_team']} {rl['home_line']:+.1f}", rl["home_odds"], rl["away_odds"], rl_probs["fg_home"], game, "fg_rl"))
+        candidates.append(price_market("Full Game Run Line", f"{game['away_team']} {rl['away_line']:+.1f}", rl["away_odds"], rl["home_odds"], rl_probs["fg_away"], game, "fg_rl"))
 
     if "fg_total" in odds:
         line = odds["fg_total"]["line"]
@@ -259,8 +308,9 @@ def evaluate_game(game):
         candidates.append(price_market("F5 Moneyline", f"{game['away_team']} F5 ML", odds["f5_ml"]["away"], odds["f5_ml"]["home"], f5["away_ml_cond"], game, "f5_ml", extra_note=f"tie after 5: {f5['tie']:.1%}"))
 
     if "f5_rl" in odds:
-        candidates.append(price_market("F5 Run Line", f"{game['home_team']} -{odds['f5_rl']['line']} F5", odds["f5_rl"]["home_minus"], odds["f5_rl"]["away_plus"], f5["home_minus_0_5"], game, "f5_rl"))
-        candidates.append(price_market("F5 Run Line", f"{game['away_team']} +{odds['f5_rl']['line']} F5", odds["f5_rl"]["away_plus"], odds["f5_rl"]["home_minus"], f5["away_plus_0_5"], game, "f5_rl"))
+        rl = odds["f5_rl"]
+        candidates.append(price_market("F5 Run Line", f"{game['home_team']} {rl['home_line']:+.1f} F5", rl["home_odds"], rl["away_odds"], rl_probs["f5_home"], game, "f5_rl"))
+        candidates.append(price_market("F5 Run Line", f"{game['away_team']} {rl['away_line']:+.1f} F5", rl["away_odds"], rl["home_odds"], rl_probs["f5_away"], game, "f5_rl"))
 
     if "f5_total" in odds:
         line = odds["f5_total"]["line"]
@@ -346,6 +396,8 @@ def render_report(data, results):
         lines.append(f"- Start: {start_time}")
         lines.append(f"- Venue: {game.get('venue', 'N/A')}")
         lines.append(f"- Starters: {game.get('away_starter', 'TBD')} vs {game.get('home_starter', 'TBD')}")
+        if game.get("starter_note"):
+            lines.append(f"- Starter handling: {game['starter_note']}")
         lines.append(f"- Team form: {game.get('away_form_note', 'N/A')} | {game.get('home_form_note', 'N/A')}")
         lines.append(f"- Starter model: {game.get('away_pitcher_note', 'N/A')} | {game.get('home_pitcher_note', 'N/A')}")
         lines.append(f"- Lineups: {game.get('lineup_status', 'unknown')}")
@@ -398,4 +450,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()     
+    main()
