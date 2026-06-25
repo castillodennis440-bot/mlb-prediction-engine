@@ -9,15 +9,36 @@ TOP_Y = 760
 LINE_HEIGHT = 14
 MAX_LINES_PER_PAGE = 48
 
+REPLACEMENTS = {
+    "—": "-",
+    "–": "-",
+    "’": "'",
+    "‘": "'",
+    "“": '"',
+    "”": '"',
+    "…": "...",
+    "•": "-",
+    "≥": ">=",
+    "≤": "<=",
+    "→": "->",
+}
+
+
+def sanitize_text(text: str) -> str:
+    for bad, good in REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
 
 def escape_pdf_text(text: str) -> str:
+    text = sanitize_text(text)
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def normalize_lines(text: str) -> list[str]:
     out = []
     for raw in text.splitlines():
-        line = raw.replace("\t", "    ")
+        line = sanitize_text(raw.replace("\t", "    "))
         if not line:
             out.append("")
             continue
