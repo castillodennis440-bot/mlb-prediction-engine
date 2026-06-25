@@ -25,6 +25,16 @@ FEATURE_COLUMNS = [
     "away_rest_days",
     "home_form_index",
     "away_form_index",
+    "home_pitcher_last5_era",
+    "away_pitcher_last5_era",
+    "home_pitcher_last5_whip",
+    "away_pitcher_last5_whip",
+    "home_pitcher_last5_k9",
+    "away_pitcher_last5_k9",
+    "home_pitcher_starts_hist",
+    "away_pitcher_starts_hist",
+    "home_pitcher_limited_sample",
+    "away_pitcher_limited_sample",
 ]
 
 
