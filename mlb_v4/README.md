@@ -1,38 +1,42 @@
-# MLB Model V4 Foundation
+# MLB Model V4.1 Foundation
 
-This is the training/model foundation for a stronger MLB prediction engine.
+This is the stronger model foundation for your MLB prediction engine.
 
 It is separate from the current `mlb_automation/` email workflow.
 
 ## Goal
-Build a more independent model that does not rely mostly on sportsbook odds.
+Build a more independent MLB model with:
+- historical game data
+- team-form features
+- starting-pitcher features
+- calibrated moneyline probabilities
+- totals projections
 
-## What this version adds
-- Historical MLB game collection
-- Chronological feature engineering
-- A moneyline probability model
-- A totals projection model
-- A daily scoring script for today's games
+## What V4.1 adds over V4
+- Historical starter game-line extraction from boxscores
+- Trailing starter form features
+- Better daily scoring inputs for probable starters
+- Cleaner separation between model training and email delivery
 
 ## Project structure
-- `config.py` — paths and core settings
-- `DATA_SCHEMA.md` — schema for raw data, features, and outputs
-- `requirements_v4.txt` — Python packages for the V4 model
-- `historical_collector.py` — collect historical MLB games from MLB Stats API
-- `feature_builder.py` — build chronological team-form features
-- `train_moneyline.py` — train and calibrate a moneyline probability model
-- `train_totals.py` — train a totals model
-- `score_today.py` — score today's MLB slate using trained models
+- `config.py` — core paths and constants
+- `DATA_SCHEMA.md` — raw / feature / output schema
+- `requirements_v4.txt` — V4.1 Python dependencies
+- `historical_collector.py` — collect historical games and starter lines
+- `feature_builder.py` — build chronological team + starter features
+- `train_moneyline.py` — train calibrated moneyline model
+- `train_totals.py` — train totals regression model
+- `score_today.py` — score today's slate using trained models
 
 ## Recommended workflow
-1. Collect historical data
-2. Build features
+1. Collect historical MLB games
+2. Build training features
 3. Train moneyline model
 4. Train totals model
 5. Score today's slate
-6. Later connect this to the email automation workflow
+6. Later connect the scored output into your live email workflow
 
-## Suggested first run order
+## Suggested run order
 ```bash
 python mlb_v4/historical_collector.py --start 2024-03-01 --end 2026-06-24
 python mlb_v4/feature_builder.py
