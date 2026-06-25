@@ -530,13 +530,41 @@ def fetch_weather(home_team: str, start_time: str | None) -> tuple[str, float, f
             },
         )
         hours = payload.get("hourly", {})
-times = hours.get("time", [])
-target = start_dt.strftime("%Y-%m-%dT%H:00")
-idx = times.index(target) if target in times else 0
-temp_values = hours.get("temperature_2m", [None])
-precip_values = hours.get("precipitation_probability", [0])
-wind_values = hours.get("wind_speed_10m", [0])
+        times = hours.get("time", [])
+        target = start_dt.strftime("%Y-%m-%dT%H:00")
+        idx = times.index(target) if target in times else 0
 
-temp = float(temp_values[idx])
-precip = float(precip_values[idx] or 0)
-wind = float(wind_values[idx] or 0)
+        temp_values = hours.get("temperature_2m", [None])
+        precip_values = hours.get("precipitation_probability", [0])
+        wind_values = hours.get("wind_speed_10m", [0])
+
+        temp = float(temp_values[idx])
+        precip = float(precip_values[idx] or 0)
+        wind = float(wind_values[idx] or 0)
+    except Exception:
+        return ("Weather feed unavailable; neutral weather penalty applied.", 0.25, 0.0)
+
+    penalty = 0.0
+    total_adjust = 0.0
+    if temp >= 30:
+        total_adjust += 0.35
+    elif temp >= 27:
+        total_adjust += 0.20
+    elif temp <= 13:
+        total_adjust -= 0.20
+    elif temp <= 8:
+        total_adjust -= 0.35
+
+    if wind >= 24:
+        penalty += 0.75
+        total_adjust += 0.10
+    elif wind >= 16:
+        penalty += 0.40
+
+    if precip >= 50:
+        penalty += 0.60
+    elif precip >= 25:
+        penalty += 0.25
+
+    note = f"Weather: {temp:.0f}°C, wind {wind:.0f} km/h, precip {precip:.0f}% at first pitch."
+    return note, round(penalty, 2), round(total_adjust, 2)
