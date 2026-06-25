@@ -530,7 +530,13 @@ def fetch_weather(home_team: str, start_time: str | None) -> tuple[str, float, f
             },
         )
         hours = payload.get("hourly", {})
-        times = hours.get("time", [])
-        target = start_dt.strftime("%Y-%m-%dT%H:00")
-        idx = times.index(target) if target in times else 0
-        temp = float(hour
+times = hours.get("time", [])
+target = start_dt.strftime("%Y-%m-%dT%H:00")
+idx = times.index(target) if target in times else 0
+temp_values = hours.get("temperature_2m", [None])
+precip_values = hours.get("precipitation_probability", [0])
+wind_values = hours.get("wind_speed_10m", [0])
+
+temp = float(temp_values[idx])
+precip = float(precip_values[idx] or 0)
+wind = float(wind_values[idx] or 0)
