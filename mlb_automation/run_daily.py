@@ -360,7 +360,7 @@ def render_report(data, results):
     source = data.get("source", {})
     generated = data.get("generated_at_utc")
 
-    lines.append(f"# MLB Daily Model Report — {data['date']}")
+    lines.append(f"# MLB Daily Model Report - {data['date']}")
     lines.append("")
     lines.append(f"Source: {source.get('provider', 'N/A')} / {source.get('bookmaker', 'N/A')}")
     if generated:
@@ -383,7 +383,7 @@ def render_report(data, results):
         lines.append("")
         for idx, (pick, game) in enumerate(top_plays[:8], 1):
             lines.append(
-                f"{idx}. {pick['selection']} @ {pick['odds']:.2f} — {pick['tier']} | {game['away_team']} at {game['home_team']} | Fair {fmt_pct(pick['fair'])} | P(est) {fmt_pct(pick['p_est'])} | Adj Edge {fmt_pts(pick['adjusted_edge'])} | EV {pick['ev']:.3f}"
+                f"{idx}. {pick['selection']} @ {pick['odds']:.2f} - {pick['tier']} | {game['away_team']} at {game['home_team']} | Fair {fmt_pct(pick['fair'])} | P(est) {fmt_pct(pick['p_est'])} | Adj Edge {fmt_pts(pick['adjusted_edge'])} | EV {pick['ev']:.3f}"
             )
         lines.append("")
 
@@ -409,11 +409,11 @@ def render_report(data, results):
 
         if result["qualified"]:
             best = result["best"]
-            lines.append(f"- Best play: {best['selection']} @ {best['odds']:.2f} — {best['tier']} | Fair {fmt_pct(best['fair'])} | P(est) {fmt_pct(best['p_est'])} | Adj Edge {fmt_pts(best['adjusted_edge'])} | EV {best['ev']:.3f}")
+            lines.append(f"- Best play: {best['selection']} @ {best['odds']:.2f} - {best['tier']} | Fair {fmt_pct(best['fair'])} | P(est) {fmt_pct(best['p_est'])} | Adj Edge {fmt_pts(best['adjusted_edge'])} | EV {best['ev']:.3f}")
             lines.append(f"- Why it qualifies: {best['reason']}")
             extras = [c for c in result["qualified"][1:3]]
             for c in extras:
-                lines.append(f"- Also qualifies: {c['selection']} @ {c['odds']:.2f} — {c['tier']} | Adj Edge {fmt_pts(c['adjusted_edge'])} | EV {c['ev']:.3f}")
+                lines.append(f"- Also qualifies: {c['selection']} @ {c['odds']:.2f} - {c['tier']} | Adj Edge {fmt_pts(c['adjusted_edge'])} | EV {c['ev']:.3f}")
         else:
             lines.append("- Best play: No qualifying selections.")
         lines.append("")
@@ -422,8 +422,15 @@ def render_report(data, results):
     if skipped:
         lines.append("## Skipped / Data Issues")
         lines.append("")
-        for row in skipped[:10]:
-            lines.append(f"- {row.get('away', 'Away')} at {row.get('home', 'Home')}: {row.get('reason', 'unknown')}")
+        shown = 0
+        for row in skipped:
+            away = row.get("away") or row.get("away_team") or "Away"
+            home = row.get("home") or row.get("home_team") or "Home"
+            reason = row.get("reason", "unknown")
+            lines.append(f"- {away} at {home}: {reason}")
+            shown += 1
+            if shown >= 10:
+                break
         lines.append("")
 
     return "\n".join(lines)
@@ -442,7 +449,7 @@ def main():
 
     output_path = Path(args.output) if args.output else Path("mlb_automation") / f"report_{data['date'].replace('-', '')}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(report)
+    output_path.write_text(report, encoding="utf-8")
 
     print(f"Report written to {output_path}")
     print()
