@@ -60,8 +60,8 @@ def main() -> None:
             merged["source_meta"]["v41_match_status"] = "unmatched"
             unmatched.append(
                 {
-                    "away_team": game.get("away_team"),
-                    "home_team": game.get("home_team"),
+                    "away": game.get("away_team"),
+                    "home": game.get("home_team"),
                     "reason": "No V4.1 prediction match found; live slate values kept",
                 }
             )
