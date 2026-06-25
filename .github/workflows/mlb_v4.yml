@@ -1,0 +1,58 @@
+name: MLB V4 Foundation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  train-and-score:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install V4 dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r mlb_v4/requirements_v4.txt
+
+      - name: Collect historical MLB games
+        run: |
+          python mlb_v4/historical_collector.py \
+            --start 2024-03-01 \
+            --end 2026-06-24
+
+      - name: Build features
+        run: |
+          python mlb_v4/feature_builder.py
+
+      - name: Train moneyline model
+        run: |
+          python mlb_v4/train_moneyline.py
+
+      - name: Train totals model
+        run: |
+          python mlb_v4/train_totals.py
+
+      - name: Score today's slate
+        run: |
+          python mlb_v4/score_today.py --date 2026-06-25
+
+      - name: Upload V4 outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-v4-output
+          path: |
+            mlb_v4/data/raw/games.jsonl
+            mlb_v4/data/features/game_features.csv
+            mlb_v4/models/moneyline_model.joblib
+            mlb_v4/models/moneyline_calibrator.joblib
+            mlb_v4/models/moneyline_meta.json
+            mlb_v4/models/totals_model.joblib
+            mlb_v4/models/totals_meta.json
+            mlb_v4/output/today_predictions.json
