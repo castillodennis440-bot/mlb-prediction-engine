@@ -22,10 +22,7 @@ def main() -> None:
     v41_rows = json.loads(Path(args.v41).read_text(encoding="utf-8"))
     live_payload = json.loads(Path(args.live).read_text(encoding="utf-8"))
 
-    pred_map = {
-        (norm(r.get("away_team")), norm(r.get("home_team"))): r
-        for r in v41_rows
-    }
+    pred_map = {(norm(r.get("away_team")), norm(r.get("home_team"))): r for r in v41_rows}
 
     merged_games = []
     unmatched = []
@@ -33,7 +30,6 @@ def main() -> None:
     for game in live_payload.get("games", []):
         key = (norm(game.get("away_team")), norm(game.get("home_team")))
         pred = pred_map.get(key)
-
         merged = dict(game)
         merged.setdefault("source_meta", {})
 
