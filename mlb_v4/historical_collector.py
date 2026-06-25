@@ -8,6 +8,8 @@ import requests
 
 import config
 
+MLB_BOXSCORE_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+
 
 def safe_get(url: str, params: dict) -> dict:
     response = requests.get(url, params=params, timeout=30)
@@ -24,6 +26,56 @@ def daterange(start_date: datetime, end_date: datetime):
     while cur <= end_date:
         yield cur
         cur += timedelta(days=1)
+
+
+def parse_ip(value) -> float:
+    if value is None:
+        return 0.0
+    s = str(value)
+    if "." not in s:
+        try:
+            return float(s)
+        except Exception:
+            return 0.0
+    whole, frac = s.split(".", 1)
+    try:
+        whole_val = int(whole)
+    except Exception:
+        whole_val = 0
+    if frac == "1":
+        frac_val = 1.0 / 3.0
+    elif frac == "2":
+        frac_val = 2.0 / 3.0
+    else:
+        try:
+            frac_val = float(f"0.{frac}")
+        except Exception:
+            frac_val = 0.0
+    return whole_val + frac_val
+
+
+def extract_starting_pitcher_line(game_pk: int, side: str) -> dict:
+    try:
+        payload = safe_get(MLB_BOXSCORE_URL.format(game_pk=game_pk), {})
+        team_box = payload.get("teams", {}).get(side, {})
+        pitcher_ids = team_box.get("pitchers", []) or []
+        players = team_box.get("players", {}) or {}
+        if not pitcher_ids:
+            return {}
+        starter_id = pitcher_ids[0]
+        starter = players.get(f"ID{starter_id}", {})
+        stats = starter.get("stats", {}).get("pitching", {}) or {}
+        return {
+            "starter_name": starter.get("person", {}).get("fullName"),
+            "starter_id": starter_id,
+            "starter_ip": parse_ip(stats.get("inningsPitched")),
+            "starter_er": int(stats.get("earnedRuns") or 0),
+            "starter_bb": int(stats.get("baseOnBalls") or 0),
+            "starter_so": int(stats.get("strikeOuts") or 0),
+            "starter_h": int(stats.get("hits") or 0),
+        }
+    except Exception:
+        return {}
 
 
 def fetch_day(day: datetime) -> list[dict]:
@@ -46,9 +98,14 @@ def fetch_day(day: datetime) -> list[dict]:
             home_team = normalize_name(home.get("team", {}).get("name", ""))
             away_runs = away.get("score")
             home_runs = home.get("score")
+            game_pk = game.get("gamePk")
+
+            away_start = extract_starting_pitcher_line(game_pk, "away") if game_pk else {}
+            home_start = extract_starting_pitcher_line(game_pk, "home") if game_pk else {}
+
             rows.append(
                 {
-                    "game_pk": game.get("gamePk"),
+                    "game_pk": game_pk,
                     "game_date": date_row.get("date"),
                     "start_time": game.get("gameDate"),
                     "status": game.get("status", {}).get("abstractGameState"),
@@ -59,10 +116,20 @@ def fetch_day(day: datetime) -> list[dict]:
                     "home_team_id": home.get("team", {}).get("id"),
                     "away_runs": away_runs,
                     "home_runs": home_runs,
-                    "away_starter": away.get("probablePitcher", {}).get("fullName"),
-                    "home_starter": home.get("probablePitcher", {}).get("fullName"),
-                    "away_starter_id": away.get("probablePitcher", {}).get("id"),
-                    "home_starter_id": home.get("probablePitcher", {}).get("id"),
+                    "away_starter": away_start.get("starter_name") or away.get("probablePitcher", {}).get("fullName"),
+                    "home_starter": home_start.get("starter_name") or home.get("probablePitcher", {}).get("fullName"),
+                    "away_starter_id": away_start.get("starter_id") or away.get("probablePitcher", {}).get("id"),
+                    "home_starter_id": home_start.get("starter_id") or home.get("probablePitcher", {}).get("id"),
+                    "away_starter_ip": away_start.get("starter_ip"),
+                    "home_starter_ip": home_start.get("starter_ip"),
+                    "away_starter_er": away_start.get("starter_er"),
+                    "home_starter_er": home_start.get("starter_er"),
+                    "away_starter_bb": away_start.get("starter_bb"),
+                    "home_starter_bb": home_start.get("starter_bb"),
+                    "away_starter_so": away_start.get("starter_so"),
+                    "home_starter_so": home_start.get("starter_so"),
+                    "away_starter_h": away_start.get("starter_h"),
+                    "home_starter_h": home_start.get("starter_h"),
                 }
             )
     return rows
@@ -77,7 +144,6 @@ def main() -> None:
 
     start_date = datetime.strptime(args.start, "%Y-%m-%d")
     end_date = datetime.strptime(args.end, "%Y-%m-%d")
-
     output_path = Path(args.output)
 
     rows = []
