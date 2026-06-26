@@ -67,6 +67,17 @@ jobs:
             --live mlb_automation/live_slate.json \
             --output mlb_automation/final_scoring_slate.json
 
+      - name: Push predictions to Supabase app database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          REPORT_DATE: ${{ env.REPORT_DATE }}
+        run: |
+          python mlb_automation/push_to_supabase.py \
+            --input mlb_automation/final_scoring_slate.json \
+            --game-date "$REPORT_DATE" \
+            --model-version V4.1
+
       - name: Run daily report
         run: |
           python mlb_automation/run_daily.py \
@@ -99,6 +110,7 @@ jobs:
           path: |
             mlb_automation/live_slate.json
             mlb_automation/final_scoring_slate.json
+            mlb_automation/supabase_push_summary.json
             mlb_automation/report_${{ github.run_id }}.md
             mlb_automation/report_${{ github.run_id }}.pdf
             mlb_v4/output/today_predictions.json
