@@ -1,5 +1,6 @@
 import argparse
 import json
+import math 
 import os
 import sys
 from datetime import datetime, timezone
@@ -139,7 +140,350 @@ def normalize_confidence(value, edge=None):
     return "Value"
 
 
+def poisson_pmf(lam, k):
+    if lam is None:
+        return 0.0
+    try:
+        lam = float(lam)
+        return math.exp(-lam) * (lam ** k) / math.factorial(k)
+    except Exception:
+        return 0.0
+
+
+def poisson_distribution(lam, max_runs=20):
+    probs = [poisson_pmf(lam, k) for k in range(max_runs + 1)]
+    total = sum(probs)
+    if total > 0:
+        probs = [p / total for p in probs]
+    return probs
+
+
+def full_game_win_probabilities(lambda_away, lambda_home):
+    away_dist = poisson_distribution(lambda_away, 20)
+    home_dist = poisson_distribution(lambda_home, 20)
+
+    away_win = 0.0
+    home_win = 0.0
+    tie = 0.0
+
+    for away_runs, pa in enumerate(away_dist):
+        for home_runs, ph in enumerate(home_dist):
+            p = pa * ph
+            if away_runs > home_runs:
+                away_win += p
+            elif home_runs > away_runs:
+                home_win += p
+            else:
+                tie += p
+
+    # MLB cannot end tied, so distribute tie probability proportionally.
+    non_tie = away_win + home_win
+    if non_tie > 0:
+        away_win = away_win / non_tie
+        home_win = home_win / non_tie
+
+    return away_win, home_win
+
+
+def total_probabilities(lambda_away, lambda_home, line):
+    away_dist = poisson_distribution(lambda_away, 20)
+    home_dist = poisson_distribution(lambda_home, 20)
+
+    over = 0.0
+    under = 0.0
+    push = 0.0
+
+    for away_runs, pa in enumerate(away_dist):
+        for home_runs, ph in enumerate(home_dist):
+            total_runs = away_runs + home_runs
+            p = pa * ph
+
+            if total_runs > line:
+                over += p
+            elif total_runs < line:
+                under += p
+            else:
+                push += p
+
+    return over, under, push
+
+
+def run_line_probability(lambda_away, lambda_home, team, line):
+    away_dist = poisson_distribution(lambda_away, 20)
+    home_dist = poisson_distribution(lambda_home, 20)
+
+    cover = 0.0
+
+    for away_runs, pa in enumerate(away_dist):
+        for home_runs, ph in enumerate(home_dist):
+            p = pa * ph
+
+            if team == "away":
+                if away_runs + line > home_runs:
+                    cover += p
+
+            if team == "home":
+                if home_runs + line > away_runs:
+                    cover += p
+
+    return cover
+
+
+def build_reasoning(row, base_reason):
+    parts = []
+
+    if base_reason:
+        parts.append(base_reason)
+
+    for key in [
+        "starter_note",
+        "model_blend_note",
+        "weather_note",
+        "bullpen_note",
+        "away_form_note",
+        "home_form_note",
+    ]:
+        value = row.get(key)
+        if value:
+            parts.append(str(value))
+
+    return " | ".join(parts)[:900]
+
+
+def make_candidate(
+    row,
+    game_date,
+    model_version,
+    market_type,
+    selection,
+    line_value,
+    odds_decimal,
+    model_probability,
+    base_reason,
+):
+    odds_decimal = to_float(odds_decimal)
+    model_probability = to_float(model_probability)
+
+    if not selection:
+        return None
+
+    if market_type not in ALLOWED_MARKETS:
+        return None
+
+    if odds_decimal is None or odds_decimal <= 1:
+        return None
+
+    if model_probability is None or model_probability <= 0 or model_probability >= 1:
+        return None
+
+    implied_probability = 1 / odds_decimal
+    adjusted_edge = (model_probability - implied_probability) * 100
+
+    # Decimal odds EV calculation.
+    ev = ((model_probability * (odds_decimal - 1)) - (1 - model_probability)) * 100
+
+    # Only publish positive-EV/value candidates.
+    if ev <= 0:
+        return None
+
+    confidence_tier = normalize_confidence(None, adjusted_edge)
+
+    source_meta = row.get("source_meta") or {}
+
+    away_team = row.get("away_team")
+    home_team = row.get("home_team")
+
+    return {
+        "model_version": model_version,
+        "game_date": game_date,
+        "start_time": source_meta.get("start_time") or row.get("start_time"),
+        "away_team": away_team,
+        "home_team": home_team,
+        "venue": row.get("venue"),
+        "away_starter": row.get("away_starter") or "TBD",
+        "home_starter": row.get("home_starter") or "TBD",
+        "market_type": market_type,
+        "selection": selection,
+        "line_value": line_value,
+        "odds_decimal": round(float(odds_decimal), 4),
+        "fair_probability": round(implied_probability * 100, 2),
+        "predicted_probability": round(model_probability * 100, 2),
+        "adjusted_edge": round(adjusted_edge, 2),
+        "ev": round(ev, 2),
+        "stake_units": 1.0,
+        "confidence_tier": confidence_tier,
+        "reasoning": build_reasoning(row, base_reason),
+        "status": "pending",
+        "archived": False,
+        "deleted_at": None,
+    }
+
+
 def build_prediction_candidates(row, game_date, model_version):
+    """
+    Converts one game from final_scoring_slate.json into app predictions.
+
+    This version supports the current model output shape:
+
+    {
+      "away_team": "...",
+      "home_team": "...",
+      "lambda_away_9": ...,
+      "lambda_home_9": ...,
+      "odds": {
+        "fg_ml": {"away": ..., "home": ...},
+        "fg_total": {"line": ..., "over": ..., "under": ...},
+        "fg_rl": {"home_line": ..., "away_line": ..., "home_odds": ..., "away_odds": ...}
+      }
+    }
+    """
+
+    candidates = []
+
+    away_team = row.get("away_team")
+    home_team = row.get("home_team")
+
+    if not away_team or not home_team:
+        return []
+
+    odds = row.get("odds") or {}
+
+    lambda_away_9 = to_float(row.get("lambda_away_9"))
+    lambda_home_9 = to_float(row.get("lambda_home_9"))
+
+    if lambda_away_9 is None or lambda_home_9 is None:
+        return []
+
+    base_reason = row.get("model_blend_note") or "Model-derived value from projected run environment and market odds."
+
+    # Full game moneyline
+    fg_ml = odds.get("fg_ml") or {}
+    away_win_prob, home_win_prob = full_game_win_probabilities(lambda_away_9, lambda_home_9)
+
+    candidates.append(
+        make_candidate(
+            row=row,
+            game_date=game_date,
+            model_version=model_version,
+            market_type="Moneyline",
+            selection=f"{away_team} ML",
+            line_value=None,
+            odds_decimal=fg_ml.get("away"),
+            model_probability=away_win_prob,
+            base_reason=base_reason,
+        )
+    )
+
+    candidates.append(
+        make_candidate(
+            row=row,
+            game_date=game_date,
+            model_version=model_version,
+            market_type="Moneyline",
+            selection=f"{home_team} ML",
+            line_value=None,
+            odds_decimal=fg_ml.get("home"),
+            model_probability=home_win_prob,
+            base_reason=base_reason,
+        )
+    )
+
+    # Full game total
+    fg_total = odds.get("fg_total") or {}
+    total_line = to_float(fg_total.get("line"))
+
+    if total_line is not None:
+        over_prob, under_prob, push_prob = total_probabilities(
+            lambda_away_9,
+            lambda_home_9,
+            total_line,
+        )
+
+        candidates.append(
+            make_candidate(
+                row=row,
+                game_date=game_date,
+                model_version=model_version,
+                market_type="Total",
+                selection=f"Over {total_line:g}",
+                line_value=total_line,
+                odds_decimal=fg_total.get("over"),
+                model_probability=over_prob,
+                base_reason=base_reason,
+            )
+        )
+
+        candidates.append(
+            make_candidate(
+                row=row,
+                game_date=game_date,
+                model_version=model_version,
+                market_type="Total",
+                selection=f"Under {total_line:g}",
+                line_value=total_line,
+                odds_decimal=fg_total.get("under"),
+                model_probability=under_prob,
+                base_reason=base_reason,
+            )
+        )
+
+    # Full game run line
+    fg_rl = odds.get("fg_rl") or {}
+
+    away_line = to_float(fg_rl.get("away_line"))
+    home_line = to_float(fg_rl.get("home_line"))
+
+    if away_line is not None:
+        away_cover_prob = run_line_probability(
+            lambda_away_9,
+            lambda_home_9,
+            "away",
+            away_line,
+        )
+
+        candidates.append(
+            make_candidate(
+                row=row,
+                game_date=game_date,
+                model_version=model_version,
+                market_type="Run Line",
+                selection=f"{away_team} {away_line:+g}",
+                line_value=away_line,
+                odds_decimal=fg_rl.get("away_odds"),
+                model_probability=away_cover_prob,
+                base_reason=base_reason,
+            )
+        )
+
+    if home_line is not None:
+        home_cover_prob = run_line_probability(
+            lambda_away_9,
+            lambda_home_9,
+            "home",
+            home_line,
+        )
+
+        candidates.append(
+            make_candidate(
+                row=row,
+                game_date=game_date,
+                model_version=model_version,
+                market_type="Run Line",
+                selection=f"{home_team} {home_line:+g}",
+                line_value=home_line,
+                odds_decimal=fg_rl.get("home_odds"),
+                model_probability=home_cover_prob,
+                base_reason=base_reason,
+            )
+        )
+
+    # Remove empty/non-value candidates.
+    candidates = [c for c in candidates if c is not None]
+
+    # Keep only strongest positive-EV candidates per game to avoid flooding the app.
+    candidates.sort(key=lambda item: item.get("ev", 0), reverse=True)
+
+    return candidates[:2]
     """
     Converts one row from final_scoring_slate.json into zero or more app predictions.
 
