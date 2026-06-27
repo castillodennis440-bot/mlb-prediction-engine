@@ -367,6 +367,7 @@ def fetch_mlb_final_games(game_date):
     return games
 
 
+
 def match_game(prediction, final_games):
     pred_away = normalize_team(prediction.get("away_team"))
     pred_home = normalize_team(prediction.get("home_team"))
@@ -375,28 +376,56 @@ def match_game(prediction, final_games):
         game_away = game.get("away_norm") or normalize_team(game.get("away_team"))
         game_home = game.get("home_norm") or normalize_team(game.get("home_team"))
 
-        # Exact normalized match.
-        if pred_away == game_away and pred_home == game_home:
-            return game
+        # Normal orientation:
+        # prediction away/home matches MLB away/home.
+        exact_normal = pred_away == game_away and pred_home == game_home
 
-        # Partial fallback match.
-        away_match = (
+        partial_normal = (
             bool(pred_away)
+            and bool(pred_home)
             and bool(game_away)
-            and (pred_away in game_away or game_away in pred_away)
-        )
-
-        home_match = (
-            bool(pred_home)
             and bool(game_home)
+            and (pred_away in game_away or game_away in pred_away)
             and (pred_home in game_home or game_home in pred_home)
         )
 
-        if away_match and home_match:
+        if exact_normal or partial_normal:
             return game
 
-    return None
+        # Reversed orientation:
+        # prediction away/home is opposite of MLB away/home.
+        exact_reversed = pred_away == game_home and pred_home == game_away
 
+        partial_reversed = (
+            bool(pred_away)
+            and bool(pred_home)
+            and bool(game_away)
+            and bool(game_home)
+            and (pred_away in game_home or game_home in pred_away)
+            and (pred_home in game_away or game_away in pred_home)
+        )
+
+        if exact_reversed or partial_reversed:
+            log(
+                f"Matched reversed team order for "
+                f"{prediction.get('away_team')} at {prediction.get('home_team')} "
+                f"against MLB game {game.get('away_team')} at {game.get('home_team')}"
+            )
+
+            # Return a copy with scores flipped into prediction orientation.
+            return {
+                **game,
+                "away_team": prediction.get("away_team"),
+                "home_team": prediction.get("home_team"),
+                "away_norm": pred_away,
+                "home_norm": pred_home,
+                "away_score": game.get("home_score"),
+                "home_score": game.get("away_score"),
+                "f5_away_score": game.get("f5_home_score"),
+                "f5_home_score": game.get("f5_away_score"),
+            }
+
+    return None
 
 def selection_side(selection, away_team, home_team):
     selection_norm = normalize_team(selection)
