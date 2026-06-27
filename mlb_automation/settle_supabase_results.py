@@ -1,4 +1,4 @@
-import argparse
+  import argparse
 import json
 import os
 import re
@@ -9,19 +9,161 @@ from urllib.parse import quote
 import requests
 
 
+TEAM_ALIASES = {
+    # AL East
+    "baltimoreorioles": "baltimoreorioles",
+    "orioles": "baltimoreorioles",
+
+    "bostonredsox": "bostonredsox",
+    "redsox": "bostonredsox",
+    "red sox": "bostonredsox",
+
+    "newyorkyankees": "newyorkyankees",
+    "yankees": "newyorkyankees",
+
+    "tampabayrays": "tampabayrays",
+    "rays": "tampabayrays",
+
+    "torontobluejays": "torontobluejays",
+    "bluejays": "torontobluejays",
+    "blue jays": "torontobluejays",
+
+    # AL Central
+    "chicagowhitesox": "chicagowhitesox",
+    "whitesox": "chicagowhitesox",
+    "white sox": "chicagowhitesox",
+
+    "clevelandguardians": "clevelandguardians",
+    "guardians": "clevelandguardians",
+
+    "detroittigers": "detroittigers",
+    "tigers": "detroittigers",
+
+    "kansascityroyals": "kansascityroyals",
+    "royals": "kansascityroyals",
+
+    "minnesotatwins": "minnesotatwins",
+    "twins": "minnesotatwins",
+
+    # AL West
+    "houstonastros": "houstonastros",
+    "astros": "houstonastros",
+
+    "losangelesangels": "losangelesangels",
+    "angels": "losangelesangels",
+
+    "athletics": "athletics",
+    "oaklandathletics": "athletics",
+    "oaklandas": "athletics",
+    "as": "athletics",
+    "a's": "athletics",
+
+    "seattlemariners": "seattlemariners",
+    "mariners": "seattlemariners",
+
+    "texasrangers": "texasrangers",
+    "rangers": "texasrangers",
+
+    # NL East
+    "atlantabraves": "atlantabraves",
+    "braves": "atlantabraves",
+
+    "miamimarlins": "miamimarlins",
+    "marlins": "miamimarlins",
+
+    "newyorkmets": "newyorkmets",
+    "mets": "newyorkmets",
+
+    "philadelphiaphillies": "philadelphiaphillies",
+    "phillies": "philadelphiaphillies",
+
+    "washingtonnationals": "washingtonnationals",
+    "nationals": "washingtonnationals",
+
+    # NL Central
+    "chicagocubs": "chicagocubs",
+    "cubs": "chicagocubs",
+
+    "cincinnatireds": "cincinnatireds",
+    "reds": "cincinnatireds",
+
+    "milwaukeebrewers": "milwaukeebrewers",
+    "brewers": "milwaukeebrewers",
+
+    "pittsburghpirates": "pittsburghpirates",
+    "pirates": "pittsburghpirates",
+
+    "stlouiscardinals": "stlouiscardinals",
+    "cardinals": "stlouiscardinals",
+    "st. louis cardinals": "stlouiscardinals",
+
+    # NL West
+    "arizonadiamondbacks": "arizonadiamondbacks",
+    "diamondbacks": "arizonadiamondbacks",
+    "diamond backs": "arizonadiamondbacks",
+    "dbacks": "arizonadiamondbacks",
+    "d-backs": "arizonadiamondbacks",
+
+    "coloradorockies": "coloradorockies",
+    "rockies": "coloradorockies",
+
+    "losangelesdodgers": "losangelesdodgers",
+    "dodgers": "losangelesdodgers",
+
+    "sandiegopadres": "sandiegopadres",
+    "padres": "sandiegopadres",
+
+    "sanfranciscogiants": "sanfranciscogiants",
+    "giants": "sanfranciscogiants",
+}
+
+
 def log(message):
     print(f"[supabase-settle] {message}")
 
 
-def normalize_team(name):
+def clean_team_text(name):
     if not name:
         return ""
     return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
 
+def normalize_team(name):
+    """
+    Converts team names and nicknames into stable canonical values.
+
+    Examples:
+    - "Houston Astros" -> "houstonastros"
+    - "Astros" -> "houstonastros"
+    - "D-backs" -> "arizonadiamondbacks"
+    """
+    if not name:
+        return ""
+
+    raw = str(name).lower().strip()
+    cleaned = clean_team_text(raw)
+
+    # Check cleaned aliases first.
+    for alias, canonical in TEAM_ALIASES.items():
+        alias_clean = clean_team_text(alias)
+
+        if cleaned == alias_clean:
+            return canonical
+
+    # Then check partial aliases.
+    for alias, canonical in TEAM_ALIASES.items():
+        alias_clean = clean_team_text(alias)
+
+        if alias_clean and alias_clean in cleaned:
+            return canonical
+
+    return cleaned
+
+
 def to_float(value, default=None):
     if value in [None, "", "null", "None"]:
         return default
+
     try:
         return float(value)
     except Exception:
@@ -46,10 +188,12 @@ def profit_loss_units(status, stake, odds_decimal):
 
 def roi_impact(status, stake, odds_decimal):
     stake = to_float(stake, 1.0)
+
     if not stake:
         return 0.0
 
     pl = profit_loss_units(status, stake, odds_decimal)
+
     return round((pl / stake) * 100, 2)
 
 
@@ -95,12 +239,16 @@ class SupabaseRest:
 
         if response.status_code not in [200, 204]:
             raise RuntimeError(
-                f"Failed to update prediction {prediction_id}: {response.status_code} {response.text}"
+                f"Failed to update prediction {prediction_id}: "
+                f"{response.status_code} {response.text}"
             )
 
     def find_result(self, prediction_id):
         response = requests.get(
-            f"{self.rest}/results?prediction_id=eq.{quote(str(prediction_id))}&select=id&limit=1",
+            f"{self.rest}/results?"
+            f"prediction_id=eq.{quote(str(prediction_id))}"
+            f"&select=id"
+            f"&limit=1",
             headers=self.headers,
             timeout=30,
         )
@@ -111,6 +259,7 @@ class SupabaseRest:
             )
 
         rows = response.json()
+
         return rows[0]["id"] if rows else None
 
     def insert_or_update_result(self, result):
@@ -180,6 +329,9 @@ def fetch_mlb_final_games(game_date):
             away_score = away.get("score")
             home_score = home.get("score")
 
+            if away_score is None or home_score is None:
+                continue
+
             innings = game.get("linescore", {}).get("innings", [])
 
             f5_away = 0
@@ -193,8 +345,10 @@ def fetch_mlb_final_games(game_date):
                 {
                     "away_team": away_team,
                     "home_team": home_team,
-                    "away_score": away_score,
-                    "home_score": home_score,
+                    "away_norm": normalize_team(away_team),
+                    "home_norm": normalize_team(home_team),
+                    "away_score": int(away_score),
+                    "home_score": int(home_score),
                     "f5_away_score": f5_away,
                     "f5_home_score": f5_home,
                     "game_pk": game.get("gamePk"),
@@ -202,6 +356,13 @@ def fetch_mlb_final_games(game_date):
             )
 
     log(f"Found {len(games)} final MLB games")
+
+    for game in games:
+        log(
+            f"Final game: {game['away_team']} at {game['home_team']} "
+            f"({game['away_norm']} at {game['home_norm']}) "
+            f"score {game['away_score']}-{game['home_score']}"
+        )
 
     return games
 
@@ -211,10 +372,27 @@ def match_game(prediction, final_games):
     pred_home = normalize_team(prediction.get("home_team"))
 
     for game in final_games:
-        game_away = normalize_team(game.get("away_team"))
-        game_home = normalize_team(game.get("home_team"))
+        game_away = game.get("away_norm") or normalize_team(game.get("away_team"))
+        game_home = game.get("home_norm") or normalize_team(game.get("home_team"))
 
+        # Exact normalized match.
         if pred_away == game_away and pred_home == game_home:
+            return game
+
+        # Partial fallback match.
+        away_match = (
+            bool(pred_away)
+            and bool(game_away)
+            and (pred_away in game_away or game_away in pred_away)
+        )
+
+        home_match = (
+            bool(pred_home)
+            and bool(game_home)
+            and (pred_home in game_home or game_home in pred_home)
+        )
+
+        if away_match and home_match:
             return game
 
     return None
@@ -279,25 +457,31 @@ def settle_prediction(prediction, final_game):
 
         if side == "away":
             adjusted = away_score + line_value
+
             if adjusted == home_score:
                 return "push"
+
             return "win" if adjusted > home_score else "loss"
 
         if side == "home":
             adjusted = home_score + line_value
+
             if adjusted == away_score:
                 return "push"
+
             return "win" if adjusted > away_score else "loss"
 
     if market == "F5 Winner":
         if side == "away":
             if f5_away_score == f5_home_score:
                 return "push"
+
             return "win" if f5_away_score > f5_home_score else "loss"
 
         if side == "home":
             if f5_home_score == f5_away_score:
                 return "push"
+
             return "win" if f5_home_score > f5_away_score else "loss"
 
     if market == "F5 Handicap":
@@ -306,14 +490,18 @@ def settle_prediction(prediction, final_game):
 
         if side == "away":
             adjusted = f5_away_score + line_value
+
             if adjusted == f5_home_score:
                 return "push"
+
             return "win" if adjusted > f5_home_score else "loss"
 
         if side == "home":
             adjusted = f5_home_score + line_value
+
             if adjusted == f5_away_score:
                 return "push"
+
             return "win" if adjusted > f5_away_score else "loss"
 
     return None
@@ -355,16 +543,29 @@ def main():
 
         if not final_game:
             skipped_no_final += 1
+
             log(
-                f"No final game match for {prediction.get('away_team')} at {prediction.get('home_team')}"
+                f"No final game match for "
+                f"{prediction.get('away_team')} at {prediction.get('home_team')} "
+                f"(normalized: "
+                f"{normalize_team(prediction.get('away_team'))} at "
+                f"{normalize_team(prediction.get('home_team'))})"
             )
+
             continue
 
         result_status = settle_prediction(prediction, final_game)
 
         if result_status not in ["win", "loss", "push", "void"]:
             skipped_unsettleable += 1
-            log(f"Could not settle prediction: {prediction.get('selection')}")
+
+            log(
+                f"Could not settle prediction: "
+                f"{prediction.get('selection')} "
+                f"market={prediction.get('market_type')} "
+                f"line={prediction.get('line_value')}"
+            )
+
             continue
 
         pl = profit_loss_units(
@@ -401,7 +602,8 @@ def main():
 
         log(
             f"Settled {prediction.get('selection')} as {result_status} "
-            f"({final_game['away_score']}-{final_game['home_score']})"
+            f"({final_game['away_team']} {final_game['away_score']} - "
+            f"{final_game['home_team']} {final_game['home_score']})"
         )
 
     summary = {
