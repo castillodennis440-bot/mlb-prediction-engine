@@ -428,15 +428,42 @@ def match_game(prediction, final_games):
     return None
 
 def selection_side(selection, away_team, home_team):
-    selection_norm = normalize_team(selection)
+    selection_text = str(selection or "").lower()
+    selection_clean = clean_team_text(selection_text)
+
     away_norm = normalize_team(away_team)
     home_norm = normalize_team(home_team)
 
-    if away_norm and away_norm in selection_norm:
+    away_clean = clean_team_text(away_team)
+    home_clean = clean_team_text(home_team)
+
+    # Direct canonical match.
+    if away_norm and away_norm in selection_clean:
         return "away"
 
-    if home_norm and home_norm in selection_norm:
+    if home_norm and home_norm in selection_clean:
         return "home"
+
+    # Direct raw team-name match.
+    if away_clean and away_clean in selection_clean:
+        return "away"
+
+    if home_clean and home_clean in selection_clean:
+        return "home"
+
+    # Nickname/alias match.
+    for alias, canonical in TEAM_ALIASES.items():
+        alias_clean = clean_team_text(alias)
+
+        if not alias_clean:
+            continue
+
+        if alias_clean in selection_clean:
+            if canonical == away_norm:
+                return "away"
+
+            if canonical == home_norm:
+                return "home"
 
     return None
 
