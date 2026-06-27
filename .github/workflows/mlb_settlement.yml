@@ -1,0 +1,55 @@
+name: MLB Result Settlement
+
+on:
+  workflow_dispatch:
+    inputs:
+      settlement_date:
+        description: "Date to settle in YYYY-MM-DD format. Leave blank to settle yesterday."
+        required: false
+        type: string
+  schedule:
+    - cron: '0 12 * * *'
+
+jobs:
+  settle-results:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set settlement date
+        env:
+          INPUT_DATE: ${{ github.event.inputs.settlement_date }}
+        run: |
+          if [ -n "$INPUT_DATE" ]; then
+            echo "SETTLEMENT_DATE=$INPUT_DATE" >> $GITHUB_ENV
+          else
+            echo "SETTLEMENT_DATE=$(date -u -d 'yesterday' +%F)" >> $GITHUB_ENV
+          fi
+
+      - name: Settle Supabase prediction results
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SETTLEMENT_DATE: ${{ env.SETTLEMENT_DATE }}
+        run: |
+          python mlb_automation/settle_supabase_results.py \
+            --date "$SETTLEMENT_DATE"
+
+      - name: Upload settlement artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-settlement-summary
+          path: |
+            mlb_automation/settlement_summary.json
