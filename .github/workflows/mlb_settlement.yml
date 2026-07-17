@@ -47,6 +47,20 @@ jobs:
           python mlb_automation/settle_supabase_results.py \
             --date "$SETTLEMENT_DATE"
 
+
+    - name: Compute model metrics
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: |
+        python mlb_automation/compute_model_metrics.py --as-of "$SETTLEMENT_DATE"
+
+    - name: Upload metrics summary
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mlb-model-metrics
+        path: mlb_automation/model_metrics_summary.json
       - name: Upload settlement artifact
         uses: actions/upload-artifact@v4
         with:
