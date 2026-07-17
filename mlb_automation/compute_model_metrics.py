@@ -1,4 +1,4 @@
-"""
+2"""
 MLB Edge Tracker — Model Quality Metrics Computer
 
 Runs after settlement (or on demand) and writes one row per model version
@@ -382,5 +382,5 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"ERROR: {type(e).__name__}: {e}")
         import traceback
-        traceback.print_exc()2
+        traceback.print_exc()
         sys.exit(1)
