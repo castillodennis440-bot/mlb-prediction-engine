@@ -1,4 +1,4 @@
-2"""
+"""
 MLB Edge Tracker — Model Quality Metrics Computer
 
 Runs after settlement (or on demand) and writes one row per model version
