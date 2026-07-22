@@ -593,11 +593,16 @@ def starter_penalties(as_,hs,ap,hp):
     return ("Probable starters available.",0.0,0.0)
 
 def lineup_status(st, now):
-    if not st: return "projected",0.50
+    if not st: return "projected",0.50,0.50
     try: sdt=datetime.fromisoformat(st.replace("Z","+00:00"))
-    except: return "projected",0.50
+    except: return "projected",0.50,0.50
     mins=(sdt-now).total_seconds()/60
-    return ("projected-near-lock",0.25) if mins<=120 else ("projected",0.50)
+    if mins<=60:
+        return ("projected-near-lock",0.25,0.35)
+    elif mins<=120:
+        return ("projected-near-lock",0.25,0.50)
+    else:
+        return ("projected",0.50,0.75)
 
 def build_game(fixture, book, schedule_games, fc, pc, now):
     p1=normalize_team(fixture.get("participant1Name") or "1")  # HOME
